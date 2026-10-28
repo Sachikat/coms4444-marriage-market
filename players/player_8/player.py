@@ -27,7 +27,7 @@ from models.player import Player as BasePlayer
 from models.profile import Profile, decrement
 
 
-class Player10(BasePlayer):
+class Player8(BasePlayer):
 	"""Rename me to Player<k>, where <k> is your group number.
 
 	One instance of this class is one person. Your code may be used for several
