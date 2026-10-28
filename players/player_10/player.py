@@ -55,6 +55,7 @@ class Player10(BasePlayer):
 		#
 		# The engine constructs you once, before round 1. Anything you want to
 		# carry between rounds lives on self, so initialise it here.
+		# Added estimates and proposed_to_me to keep track of the estimated happiness with each candidate and whether they proposed to me.
 		self.history: dict[int, list[Profile]] = {}
 		self.estimates: dict[int, float] = {}
 		self.proposed_to_me: set[int] = set()
