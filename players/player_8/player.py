@@ -13,6 +13,8 @@ This directory is not itself discovered - the registry only matches
 ``player_<digits>`` - so the template can never appear in a run as a competitor.
 """
 
+from math import ceil, sqrt
+
 from models.player import (
 	Advertisement,
 	Candidate,
@@ -34,6 +36,14 @@ PRIOR_COUNT = 1.0
 #   'scaled'      - that schedule, shrunk when our odds of a good match are low.
 #   'reservation' - the happiness we can still expect to beat by searching on.
 BAR_MODE = 'reservation'
+
+# How choose_dates picks people we have never met (see _ad_score):
+#   'original'       - a random half of them.
+#   'adfit_half'     - the half whose ads promise the most happiness.
+#   'adfit_quarter'  - the best quarter.
+#   'adfit_positive' - everyone whose ad promises positive happiness.
+#   'topk'           - one shortlist of everyone, met or not, best first.
+DATE_MODE = 'adfit_half'
 # 'scaled': odds at or above this keep the full schedule; below it, the bar
 # shrinks in proportion.
 ODDS_REFERENCE = 0.5
@@ -84,6 +94,7 @@ class Player8(BasePlayer):
 		self._observe(self.profile)
 		self._observe(self.ideal)
 		self._outlook: list[tuple[float, float]] | None = None  # cache, see _outlook_dist
+		self._expected: tuple[list[float], list[float]] | None = None  # cache, see _ad_score
 		self.unmet = self.people - 1  # candidates we have never dated, from choose_dates
 
 	def advertise(self) -> Advertisement:
@@ -125,9 +136,26 @@ class Player8(BasePlayer):
 		in rare cases you sit a round out.
 		"""
 		good = [c.index for c in candidates if self.estimates.get(c.index, 0.0) > 0]
-		fresh = [c.index for c in candidates if c.index not in self.estimates]
-		self.rng.shuffle(fresh)
-		chosen = good + fresh[: max(2, len(fresh) // 2)]
+		fresh = [c for c in candidates if c.index not in self.estimates]
+		self.rng.shuffle(fresh)  # random tie-breaks for the stable sorts below
+		if DATE_MODE == 'original':
+			picked = fresh[: max(2, len(fresh) // 2)]
+		elif DATE_MODE == 'topk':
+			# One ranking for everyone: what we learned on dates for people we
+			# have met, what their ad suggests for everyone else.
+			pool = [c for c in candidates if c.index in good] + fresh
+			pool.sort(key=lambda c: -self.estimates.get(c.index, self._ad_score(c.ad)))
+			width = max(3, ceil(1.5 * sqrt(len(candidates))))
+			good, picked = [], pool[:width]
+		else:
+			fresh.sort(key=lambda c: -self._ad_score(c.ad))
+			if DATE_MODE == 'adfit_half':
+				picked = fresh[: max(2, len(fresh) // 2)]
+			elif DATE_MODE == 'adfit_quarter':
+				picked = fresh[: max(2, len(fresh) // 4)]
+			else:  # 'adfit_positive'
+				picked = [c for c in fresh if self._ad_score(c.ad) > 0] or fresh[:2]
+		chosen = good + [c.index for c in picked]
 		if not chosen:
 			chosen = [c.index for c in candidates]
 		self.unmet = sum(1 for c in candidates if c.dates == 0)
@@ -212,6 +240,7 @@ class Player8(BasePlayer):
 		for i, v in enumerate(values):
 			self.counts[i][v] += 1
 		self._outlook = None
+		self._expected = None
 
 	def _belief(self, dim: int) -> list[float]:
 		"""Posterior predictive for one dimension: P(value = v) = count_v / total."""
@@ -246,6 +275,28 @@ class Player8(BasePlayer):
 					dist = step
 			self._outlook = sorted((self.bonus - k / 2, p) for k, p in dist.items())
 		return self._outlook
+
+	def _ad_score(self, ad: Advertisement) -> float:
+		"""Expected happiness with someone we only know by their ad.
+
+		Every dimension costs what a random person would cost on average under
+		our estimate of P, except the two the ad reveals: their advertised trait
+		replaces our guess of their value, and their sought value replaces our
+		guess of what they want there.
+		"""
+		if self._expected is None:
+			mine, theirs = [], []
+			for i in range(self.dims):
+				belief = self._belief(i)
+				mine.append(sum(p * self._gap(self.ideal[i], v, i) for v, p in enumerate(belief)))
+				theirs.append(
+					sum(p * self._gap(v, self.profile[i], i) for v, p in enumerate(belief))
+				)
+			self._expected = (mine, theirs)
+		mine, theirs = list(self._expected[0]), list(self._expected[1])
+		mine[ad.own_dim] = self._gap(self.ideal[ad.own_dim], ad.own_value, ad.own_dim)
+		theirs[ad.seek_dim] = self._gap(ad.seek_value, self.profile[ad.seek_dim], ad.seek_dim)
+		return self.bonus - sum(mine) - sum(theirs) / 2
 
 	def _odds(self) -> float:
 		"""Chance a random partner would give us positive happiness."""
