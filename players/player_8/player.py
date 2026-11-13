@@ -78,10 +78,17 @@ STD_PENALTY = 1.0
 CONSISTENCY_TOL = 4
 # Their ad's own value is at least this far from what we observed on that trait.
 AD_MISMATCH = 3
+# Whether that mismatch marks them suspect. Off: random players post random ads
+# but project honestly, so the mismatch says nothing about their projection.
+AD_MISMATCH_SUSPECT = False
 # Extra happiness (fraction of B) we subtract for partners caught lying.
 SUSPECT_FRAC = 0.10
 # Ads boasting on a monotonic trait are only partly trusted in _ad_score.
 AD_TRUST = 0.7
+# Ads that show a high monotonic trait look like a deliberate player, who will
+# commit when the match is good; random ads rarely do. Bonus as a fraction of B.
+STRATEGIC_AD_BONUS = 0.1
+STRATEGIC_AD_VALUE = 7
 # --- Marry for positive benefit ---
 # We never propose below MARGIN_FRAC * B (a safety margin above zero, since our
 # estimate of their traits can be off).
@@ -322,7 +329,7 @@ class Player8(BasePlayer):
 		if seen and sum(abs(a - b) for a, b in zip(seen[-1], observed)) > CONSISTENCY_TOL:
 			self.suspect.add(date.partner)
 		ad = getattr(date, 'partner_ad', None)
-		if ad is not None and abs(observed[ad.own_dim] - ad.own_value) >= AD_MISMATCH:
+		if AD_MISMATCH_SUSPECT and ad is not None and abs(observed[ad.own_dim] - ad.own_value) >= AD_MISMATCH:
 			self.suspect.add(date.partner)
 		seen.append(observed)
 
@@ -460,7 +467,10 @@ class Player8(BasePlayer):
 			claimed = AD_TRUST * claimed + (1 - AD_TRUST) * mine[ad.own_dim]
 		mine[ad.own_dim] = claimed
 		theirs[ad.seek_dim] = self._gap(ad.seek_value, self.profile[ad.seek_dim], ad.seek_dim)
-		return self.bonus - sum(mine) - sum(theirs) / 2
+		score = self.bonus - sum(mine) - sum(theirs) / 2
+		if self.monotonic and ad.own_dim < self.monotonic and ad.own_value >= STRATEGIC_AD_VALUE:
+			score += STRATEGIC_AD_BONUS * self.bonus  # looks like a deliberate player, not a random ad
+		return score
 
 	def _odds(self) -> float:
 		"""Chance a random partner would give us positive happiness."""
